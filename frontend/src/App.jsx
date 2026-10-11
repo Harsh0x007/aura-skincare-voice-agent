@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Headphones, Leaf, Mic, Phone, PhoneOff, Package, Truck, CheckCircle2, CircleAlert, Sparkles, ArrowUpRight, Volume2 } from "lucide-react";
+import { Leaf, Sparkles, ArrowUpRight } from "lucide-react";
 import AuthForm from "./components/AuthForm";
 import OrderPanel from "./components/OrderPanel";
+import CallSummary from "./components/CallSummary";
+import VoiceAssistant from "./components/VoiceAssistant";
 
 const fallbackOrders = [
   { order_id: "ORD-101", customer: "Priya Sharma", product: "Vitamin C Serum (30ml)", value: 699, status: "Out for Delivery", carrier: "BlueDart", tracking_id: "BD-982103", notes: "Expected by 6 PM today" },
@@ -12,6 +14,7 @@ const fallbackOrders = [
 export default function App() {
   const [callState, setCallState] = useState("idle");
   const [user, setUser] = useState(null);
+  const [authChecking, setAuthChecking] = useState(true);
   const [authMode, setAuthMode] = useState("login");
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
@@ -32,6 +35,42 @@ export default function App() {
   const speakingRef = useRef(false);
   const interruptRecognitionRef = useRef(null);
   const speechResolveRef = useRef(null);
+
+
+  useEffect(() => {
+    async function restoreLogin() {
+      const token = localStorage.getItem("aura_token");
+
+      if (!token) {
+        setAuthChecking(false);
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/auth/me", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          localStorage.removeItem("aura_token");
+          setUser(null);
+          return;
+        }
+
+        const data = await response.json();
+        setUser(data.user);
+      } catch (error) {
+        console.error("Could not restore login:", error);
+      } finally {
+        setAuthChecking(false);
+      }
+    }
+
+    restoreLogin();
+  }, []);
+
 
 
   async function handleAuth(e) {
@@ -160,101 +199,50 @@ export default function App() {
     }
   }
 
-  function speak(text) {
-    return new Promise(resolve => {
-      if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
-        resolve();
-        return;
-      }
 
+  async function speak(text) {
+    const safeText = String(text || "").trim();
+    if (!safeText) return;
+
+    if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
-      speakingRef.current = true;
-      speechResolveRef.current = resolve;
+    }
 
-      const SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
+    speakingRef.current = true;
 
-      function finishSpeech() {
-        speakingRef.current = false;
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: safeText }),
+      });
 
-        try {
-          interruptRecognitionRef.current?.stop();
-        } catch { }
-
-        interruptRecognitionRef.current = null;
-
-        if (speechResolveRef.current === resolve) {
-          speechResolveRef.current = null;
-        }
-
-        resolve();
+      if (!response.ok) {
+        throw new Error("Failed to generate AI voice");
       }
 
-      if (SpeechRecognition && shouldListenRef.current) {
-        try {
-          const interruptRecognition = new SpeechRecognition();
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
 
-          interruptRecognition.lang = "en-IN";
-          interruptRecognition.continuous = false;
-          interruptRecognition.interimResults = false;
+      try {
+        await new Promise((resolve, reject) => {
+          audio.onended = resolve;
+          audio.onerror = () => reject(new Error("Audio playback failed"));
 
-          interruptRecognition.onresult = event => {
-            const spoken =
-              event.results?.[event.results.length - 1]?.[0]?.transcript?.trim();
-
-            if (!spoken || !speakingRef.current) return;
-
-            // The customer interrupted Aria.
-            speakingRef.current = false;
-            window.speechSynthesis.cancel();
-
-            try {
-              interruptRecognition.stop();
-            } catch { }
-
-            if (speechResolveRef.current === resolve) {
-              speechResolveRef.current = null;
-            }
-
-            resolve();
-
-            // Let the previous response finish its cleanup first.
-            setTimeout(() => {
-              if (shouldListenRef.current) {
-                busyRef.current = false;
-                sendMessage(spoken);
-              }
-            }, 300);
-          };
-
-          interruptRecognition.onerror = () => { };
-          interruptRecognition.onend = () => {
-            if (interruptRecognitionRef.current === interruptRecognition) {
-              interruptRecognitionRef.current = null;
-            }
-          };
-
-          interruptRecognitionRef.current = interruptRecognition;
-          interruptRecognition.start();
-        } catch {
-          interruptRecognitionRef.current = null;
-        }
+          audio.play().catch(reject);
+        });
+      } finally {
+        audio.pause();
+        URL.revokeObjectURL(audioUrl);
       }
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "en-IN";
-      utterance.rate = 1;
-
-      const voices = window.speechSynthesis.getVoices();
-      const indianVoice = voices.find(v => /en-IN/i.test(v.lang));
-
-      if (indianVoice) utterance.voice = indianVoice;
-
-      utterance.onend = finishSpeech;
-      utterance.onerror = finishSpeech;
-
-      window.speechSynthesis.speak(utterance);
-    });
+    } catch (error) {
+      console.error("Aura voice error:", error);
+    } finally {
+      speakingRef.current = false;
+    }
   }
 
   async function startCall() {
@@ -297,6 +285,10 @@ export default function App() {
   }
 
   const stateLabel = { idle: "Ready to connect", listening: "Listening", thinking: "Thinking", speaking: "Speaking" }[callState];
+  if (authChecking) {
+    return <div className="loading-screen">Loading your session...</div>;
+  }
+
   if (!user) {
     return <AuthForm onLogin={setUser} />;
   }
@@ -314,32 +306,20 @@ export default function App() {
         <p className="hero-copy">Meet Aria, your Aura support specialist. Ask about your order, our products, delivery, or returns — just speak naturally.</p>
       </section>
 
+
       <section className="workspace">
         <div className="main-column">
-          <div className="call-card">
-            <div className="card-topline"><span className="mini-label">VOICE SUPPORT</span><span className={`state-pill ${callState}`}><span className="state-dot" />{stateLabel}</span></div>
-            <div className={`aria-orb ${callState}`}><div className="orb-inner"><Headphones size={34} /></div><span className="orb-ring ring-one" /><span className="orb-ring ring-two" /></div>
-            <h2>Hi, I'm Aria.</h2>
-            <p className="call-subtitle">{callState === "idle" ? "I'm here to make things simple. What can I help you with today?" : callState === "listening" ? "I'm listening. Go ahead." : callState === "thinking" ? "One moment while I check that for you…" : "I'm speaking. You can interrupt me anytime."}</p>
-            <div className="waveform" aria-label={stateLabel}>{Array.from({ length: 31 }, (_, i) => <span key={i} style={{ "--i": i }} className={callState === "speaking" || callState === "listening" ? "active" : ""} />)}</div>
-            <div className="call-actions">
-              <button className="start-button" onClick={startCall} disabled={callState !== "idle"}><Phone size={17} fill="currentColor" /> Start call</button>
-              <button className="end-button" onClick={endCall} disabled={callState === "idle"}><PhoneOff size={16} /> End call</button>
-            </div>
-            <form className="lookup-form" onSubmit={submitTypedMessage} style={{ marginTop: "14px" }}><label htmlFor="chat-message">Or type a message to Aria</label><div className="lookup-row"><input id="chat-message" value={typedMessage} onChange={e => setTypedMessage(e.target.value)} placeholder="Ask about ORD-101 or returns" /><button type="submit" aria-label="Send message" disabled={!typedMessage.trim()}><ArrowUpRight size={17} /></button></div></form>
-            <div className="mic-note"><Mic size={13} /> Microphone permission is required for voice <span>·</span> Use headphones for best results</div>
-            {error && <div className="error-banner"><CircleAlert size={16} /><span>{error}</span></div>}
-          </div>
-
-          <div className="panel transcript-panel">
-            <div className="panel-heading"><div><span className="mini-label">LIVE CONVERSATION</span><h3>Call transcript</h3></div><span className="count-chip">{transcript.length} messages</span></div>
-            <div className="transcript-body">
-              {transcript.length === 0 ? <div className="empty-state"><div className="empty-icon"><Volume2 size={20} /></div><strong>Your conversation will appear here</strong><p>Start a call and talk to Aria. Your transcript will be collected as you speak.</p></div> :
-                transcript.map((line, i) => <div className={`message ${line.role}`} key={i}><div className="message-avatar">{line.role === "aria" ? <Leaf size={14} /> : "Y"}</div><div className="message-content"><div className="message-meta"><strong>{line.role === "aria" ? "Aria" : "You"}</strong><time>{line.time}</time></div><p>{line.text}</p></div></div>)}
-            </div>
-          </div>
-
-          {summary && <div className="panel summary-panel"><div className="panel-heading"><div><span className="mini-label">POST-CALL REPORT</span><h3>Call summary</h3></div><CheckCircle2 size={20} color="#4b7659" /></div><pre>{JSON.stringify(summary, null, 2)}</pre><button className="copy-button" onClick={() => navigator.clipboard?.writeText(JSON.stringify({ transcript, summary }, null, 2))}>Copy transcript + JSON</button></div>}
+          <VoiceAssistant
+            callState={callState}
+            stateLabel={stateLabel}
+            startCall={startCall}
+            endCall={endCall}
+            typedMessage={typedMessage}
+            setTypedMessage={setTypedMessage}
+            submitTypedMessage={submitTypedMessage}
+            error={error}
+          />
+          <CallSummary transcript={transcript} summary={summary} />
         </div>
 
         <OrderPanel
@@ -350,6 +330,7 @@ export default function App() {
           lookupResult={lookupResult}
         />
       </section>
+
     </main>
     <footer><div className="footer-brand"><Leaf size={15} /> AURA SKINCARE</div><span>Thoughtful care, every conversation.</span><span className="footer-demo">Assessment demo · Mock order data</span></footer>
 
