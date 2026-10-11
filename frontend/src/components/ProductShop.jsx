@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { ShoppingBag, Plus, Minus, CheckCircle2 } from "lucide-react";
 import "./ProductShop.css";
+import API_BASE_URL from "../api";
 
 export default function ProductShop({ onOrderPlaced }) {
     const [products, setProducts] = useState([]);
@@ -17,7 +18,7 @@ export default function ProductShop({ onOrderPlaced }) {
 
         async function loadProducts() {
             try {
-                const response = await fetch("/api/products");
+                const response = await fetch(`${API_BASE_URL}/api/products`);
                 const data = await response.json();
 
                 if (!response.ok) {
@@ -94,7 +95,7 @@ export default function ProductShop({ onOrderPlaced }) {
         setCheckingOut(true);
 
         try {
-            const response = await fetch("/api/orders/checkout", {
+            const response = await fetch(`${API_BASE_URL}/api/orders/checkout`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -119,7 +120,7 @@ export default function ProductShop({ onOrderPlaced }) {
             setCart({});
             setAddress("");
 
-            const refreshed = await fetch("/api/products");
+            const refreshed = await fetch(`${API_BASE_URL}/api/products`);
             if (refreshed.ok) {
                 const refreshedData = await refreshed.json();
                 setProducts(refreshedData.products || []);

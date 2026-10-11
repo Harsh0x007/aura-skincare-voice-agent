@@ -1,6 +1,7 @@
 
 import { useState } from "react";
 import "./AuthForm.css";
+import API_BASE_URL from "../api";
 
 export default function AuthForm({ onLogin }) {
     const [mode, setMode] = useState("login");
@@ -20,7 +21,7 @@ export default function AuthForm({ onLogin }) {
                 mode === "login" ? "login" : "register";
 
             const response = await fetch(
-                `http://localhost:4000/api/auth/${endpoint}`,
+                `${API_BASE_URL}/api/auth/${endpoint}`,
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },

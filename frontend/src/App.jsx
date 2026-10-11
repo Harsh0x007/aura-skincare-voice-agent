@@ -5,6 +5,7 @@ import OrderPanel from "./components/OrderPanel";
 import CallSummary from "./components/CallSummary";
 import VoiceAssistant from "./components/VoiceAssistant";
 import ProductShop from "./components/ProductShop";
+import API_BASE_URL from "./api";
 
 const fallbackOrders = [
   { order_id: "ORD-101", customer: "Priya Sharma", product: "Vitamin C Serum (30ml)", value: 699, status: "Out for Delivery", carrier: "BlueDart", tracking_id: "BD-982103", notes: "Expected by 6 PM today" },
@@ -55,7 +56,7 @@ export default function App() {
       }
 
       try {
-        const response = await fetch("/api/auth/me", {
+        const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -90,7 +91,7 @@ export default function App() {
       const isRegister = authMode === "register";
 
       const response = await fetch(
-        `/api/auth/${isRegister ? "register" : "login"}`,
+        `${API_BASE_URL}/api/auth/${isRegister ? "register" : "login"}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -147,7 +148,7 @@ export default function App() {
       }
 
       try {
-        const response = await fetch("/api/orders/my", {
+        const response = await fetch(`${API_BASE_URL}/api/orders/my`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -250,7 +251,7 @@ export default function App() {
       const token = localStorage.getItem("aura_token");
 
       console.time("Aria: chat request");
-      const response = await fetch("/api/chat", {
+      const response = await fetch(`${API_BASE_URL}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -375,8 +376,8 @@ export default function App() {
     const ttsStartedAt = performance.now();
     try {
       const response = isGreeting
-        ? await fetch("/api/tts/greeting")
-        : await fetch("/api/tts", {
+        ? await fetch(`${API_BASE_URL}/api/tts/greeting`)
+        : await fetch(`${API_BASE_URL}/api/tts`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: safeText }),
@@ -534,7 +535,7 @@ export default function App() {
     }
 
     try {
-      const response = await fetch("/api/orders/my", {
+      const response = await fetch(`${API_BASE_URL}/api/orders/my`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -695,7 +696,7 @@ export default function App() {
         <ProductShop
           onOrderPlaced={async () => {
             const token = localStorage.getItem("aura_token");
-            const response = await fetch("/api/orders/my", {
+            const response = await fetch(`${API_BASE_URL}/api/orders/my`, {
               headers: {
                 Authorization: `Bearer ${token}`,
               },
