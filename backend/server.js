@@ -24,10 +24,10 @@ app.use(
       "http://localhost:5173",
       "http://127.0.0.1:5173",
       "https://aura-voice-agent-nine.vercel.app",
+      "https://aura-skincare-voice-agent-nine.vercel.app",
     ],
   })
 );
-
 app.use(express.json({ limit: "1mb" }));
 
 app.use("/api/auth", authRoutes);
