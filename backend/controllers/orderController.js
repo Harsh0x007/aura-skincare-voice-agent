@@ -1,8 +1,8 @@
 
-import db from "../config/database.js";
+import pool from "../config/database.js";
 import crypto from "node:crypto";
 
-export function checkout(req, res) {
+export async function checkout(req, res) {
     const userId = req.user.id;
     const items = req.body?.items;
     const address = String(req.body?.delivery_address || "").trim();
@@ -51,143 +51,169 @@ export function checkout(req, res) {
         });
     }
 
+    const client = await pool.connect();
+
     try {
-        const placeOrder = db.transaction(() => {
-            let total = 0;
-            const orderItems = [];
+        await client.query("BEGIN");
 
-            for (const [productId, quantity] of quantities) {
-                const product = db.prepare(`
-          SELECT id, name, price, stock
-          FROM products
-          WHERE id = ? AND active = 1
-        `).get(productId);
+        let total = 0;
+        const orderItems = [];
 
-                if (!product) {
-                    throw new Error(`Product ${productId} is unavailable.`);
-                }
+        for (const [productId, quantity] of quantities) {
+            const result = await client.query(
+                `SELECT id, name, price, stock
+                 FROM products
+                 WHERE id = $1 AND active = 1
+                 FOR UPDATE`,
+                [productId]
+            );
 
-                if (product.stock < quantity) {
-                    throw new Error(
-                        `Only ${product.stock} units of ${product.name} are available.`
-                    );
-                }
+            const product = result.rows[0];
 
-                total += product.price * quantity;
-
-                if (!Number.isSafeInteger(total)) {
-                    throw new Error("Order total is too large.");
-                }
-
-                orderItems.push({
-                    product,
-                    quantity
-                });
+            if (!product) {
+                const error = new Error(`Product ${productId} is unavailable.`);
+                error.statusCode = 400;
+                throw error;
             }
 
-            const orderId = `AURA-${crypto.randomUUID()
-                .replaceAll("-", "")
-                .slice(0, 12)
-                .toUpperCase()}`;
+            if (product.stock < quantity) {
+                const error = new Error(
+                    `Only ${product.stock} units of ${product.name} are available.`
+                );
+                error.statusCode = 400;
+                throw error;
+            }
 
-            const result = db.prepare(`
-        INSERT INTO orders (
-          order_id, user_id, total_amount,
-          status, payment_method, payment_status, delivery_address
-        )
-        VALUES (?, ?, ?, 'Processing', 'COD', 'Pending', ?)
-      `).run(orderId, userId, total, address);
+            total += product.price * quantity;
 
-            const insertItem = db.prepare(`
-        INSERT INTO order_items (
-          order_id, product_id, product_name, quantity, unit_price
-        )
-        VALUES (?, ?, ?, ?, ?)
-      `);
+            if (!Number.isSafeInteger(total)) {
+                const error = new Error("Order total is too large.");
+                error.statusCode = 400;
+                throw error;
+            }
 
-            const reduceStock = db.prepare(`
-        UPDATE products
-        SET stock = stock - ?
-        WHERE id = ? AND stock >= ?
-      `);
+            orderItems.push({ product, quantity });
+        }
 
-            for (const item of orderItems) {
-                insertItem.run(
-                    result.lastInsertRowid,
+        const orderId = `AURA-${crypto.randomUUID()
+            .replaceAll("-", "")
+            .slice(0, 12)
+            .toUpperCase()}`;
+
+        const orderResult = await client.query(
+            `INSERT INTO orders (
+                order_id, user_id, total_amount,
+                status, payment_method, payment_status, delivery_address
+             )
+             VALUES ($1, $2, $3, 'Processing', 'COD', 'Pending', $4)
+             RETURNING id`,
+            [orderId, userId, total, address]
+        );
+
+        const databaseOrderId = orderResult.rows[0].id;
+
+        for (const item of orderItems) {
+            await client.query(
+                `INSERT INTO order_items (
+                    order_id, product_id, product_name, quantity, unit_price
+                 )
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    databaseOrderId,
                     item.product.id,
                     item.product.name,
                     item.quantity,
                     item.product.price
-                );
+                ]
+            );
 
-                const update = reduceStock.run(
-                    item.quantity,
-                    item.product.id,
-                    item.quantity
-                );
+            const update = await client.query(
+                `UPDATE products
+                 SET stock = stock - $1
+                 WHERE id = $2 AND stock >= $1
+                 RETURNING id`,
+                [item.quantity, item.product.id]
+            );
 
-                if (update.changes !== 1) {
-                    throw new Error(`Stock changed for ${item.product.name}. Please retry.`);
-                }
+            if (update.rowCount !== 1) {
+                const error = new Error(
+                    `Stock changed for ${item.product.name}. Please retry.`
+                );
+                error.statusCode = 400;
+                throw error;
             }
+        }
 
-            return {
+        await client.query("COMMIT");
+
+        return res.status(201).json({
+            message: "Order placed successfully.",
+            order: {
                 order_id: orderId,
                 total_amount: total,
                 payment_method: "COD",
                 payment_status: "Pending",
                 status: "Processing"
-            };
-        });
-
-        const order = placeOrder();
-        return res.status(201).json({
-            message: "Order placed successfully.",
-            order
+            }
         });
     } catch (error) {
-        if (
-            error.message.includes("unavailable") ||
-            error.message.includes("available.") ||
-            error.message.includes("Stock changed") ||
-            error.message === "Order total is too large."
-        ) {
+        try {
+            await client.query("ROLLBACK");
+        } catch (rollbackError) {
+            console.error("Checkout rollback error:", rollbackError.message);
+        }
+
+        if (error.statusCode === 400) {
             return res.status(400).json({ error: error.message });
         }
 
         console.error("Checkout error:", error.message);
         return res.status(500).json({ error: "Could not place your order." });
+    } finally {
+        client.release();
     }
 }
 
-export function getMyOrders(req, res) {
+export async function getMyOrders(req, res) {
     try {
-        const orders = db.prepare(`
-      SELECT
-        o.order_id, o.total_amount, o.status,
-        o.payment_method, o.payment_status,
-        o.delivery_address, o.created_at
-      FROM orders o
-      WHERE o.user_id = ?
-      ORDER BY o.id DESC
-    `).all(req.user.id);
+        const result = await pool.query(
+            `SELECT
+                o.id,
+                o.order_id,
+                o.total_amount,
+                o.status,
+                o.payment_method,
+                o.payment_status,
+                o.delivery_address,
+                o.created_at
+             FROM orders o
+             WHERE o.user_id = $1
+             ORDER BY o.id DESC`,
+            [req.user.id]
+        );
 
-        const getItems = db.prepare(`
-      SELECT product_name, quantity, unit_price
-      FROM order_items
-      WHERE order_id = (
-        SELECT id FROM orders WHERE order_id = ? AND user_id = ?
-      )
-    `);
+        const orders = await Promise.all(
+            result.rows.map(async (order) => {
+                const itemsResult = await pool.query(
+                    `SELECT product_name, quantity, unit_price
+                     FROM order_items
+                     WHERE order_id = $1
+                     ORDER BY id`,
+                    [order.id]
+                );
 
-        res.json({
-            orders: orders.map((order) => ({
-                ...order,
-                items: getItems.all(order.order_id, req.user.id)
-            }))
-        });
+                const { id, ...publicOrder } = order;
+
+                return {
+                    ...publicOrder,
+                    items: itemsResult.rows
+                };
+            })
+        );
+
+        return res.json({ orders });
     } catch (error) {
         console.error("Get my orders error:", error.message);
-        res.status(500).json({ error: "Could not load your orders." });
+        return res.status(500).json({ error: "Could not load your orders." });
     }
 }

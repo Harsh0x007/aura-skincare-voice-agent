@@ -2,7 +2,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import db from "./config/database.js";
+import pool, { initializeDatabase } from "./config/database.js";
 import authMiddleware from "./middleware/authMiddleware.js";
 
 import authRoutes from "./routes/authRoutes.js";
@@ -23,6 +23,7 @@ app.use(
     origin: [
       "http://localhost:5173",
       "http://127.0.0.1:5173",
+      "https://aura-voice-agent-nine.vercel.app",
     ],
   })
 );
@@ -245,15 +246,18 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
   if (asksAboutOrder) {
     try {
       // Only retrieve orders belonging to the authenticated customer.
-      const customerOrders = db.prepare(`
-        SELECT
-          order_id, total_amount, status,
-          payment_method, payment_status,
-          delivery_address, created_at
-        FROM orders
-        WHERE user_id = ?
-        ORDER BY id DESC
-      `).all(req.user.id);
+      const customerOrdersResult = await pool.query(
+        `SELECT
+      id, order_id, total_amount, status,
+      payment_method, payment_status,
+      delivery_address, created_at
+   FROM orders
+   WHERE user_id = $1
+   ORDER BY id DESC`,
+        [req.user.id]
+      );
+
+      const customerOrders = customerOrdersResult.rows;
 
       let selectedOrder = null;
 
@@ -271,29 +275,29 @@ app.post("/api/chat", authMiddleware, async (req, res) => {
 
       if (customerOrders.length > 0) {
         // Load items for every order belonging to this authenticated customer.
-        const ordersWithItems = customerOrders.map((order) => {
-          const items = db.prepare(`
-      SELECT product_name, quantity, unit_price
-      FROM order_items
-      WHERE order_id = (
-        SELECT id FROM orders
-        WHERE order_id = ? AND user_id = ?
-      )
-    `).all(order.order_id, req.user.id);
+        const ordersWithItems = await Promise.all(
+          customerOrders.map(async (order) => {
+            const itemsResult = await pool.query(
+              `SELECT product_name, quantity, unit_price
+       FROM order_items
+       WHERE order_id = $1`,
+              [order.id]
+            );
 
-          return {
-            ...order,
-            total_amount_rupees: `₹${(order.total_amount / 100).toLocaleString("en-IN", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}`,
-            items: items.map((item) => ({
-              product: item.product_name,
-              quantity: item.quantity,
-              unit_price_rupees: (item.unit_price / 100).toFixed(2),
-            })),
-          };
-        });
+            return {
+              ...order,
+              total_amount_rupees: `₹${(order.total_amount / 100).toLocaleString("en-IN", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}`,
+              items: itemsResult.rows.map((item) => ({
+                product: item.product_name,
+                quantity: item.quantity,
+                unit_price_rupees: (item.unit_price / 100).toFixed(2),
+              })),
+            };
+          })
+        );
 
         const normalizedMessage = message.toLowerCase();
         const asksForAllOrders =
@@ -459,9 +463,20 @@ Explain that no order is currently available in their account.
   }
 });
 
-app.listen(PORT, () => {
-  console.log(
-    `Aura backend listening on http://localhost:${PORT} ` +
-    `(Ollama model: ${OLLAMA_MODEL})`
-  );
-});
+
+async function startServer() {
+  try {
+    await initializeDatabase();
+
+    app.listen(PORT, () => {
+      console.log(
+        `Aura backend listening on port ${PORT} (Ollama model: ${OLLAMA_MODEL})`
+      );
+    });
+  } catch (error) {
+    console.error("Failed to initialize PostgreSQL:", error.message);
+    process.exit(1);
+  }
+}
+
+startServer();

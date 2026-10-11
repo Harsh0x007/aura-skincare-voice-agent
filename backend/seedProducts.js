@@ -1,5 +1,5 @@
 
-import db from "./config/database.js";
+import pool, { initializeDatabase } from "./config/database.js";
 
 const products = [
   {
@@ -46,28 +46,47 @@ const products = [
   }
 ];
 
-const insertProduct = db.prepare(`
-  INSERT INTO products (name, description, price, stock, image_url)
-  VALUES (@name, @description, @price, @stock, @image_url)
-`);
+async function seedProducts() {
+  await initializeDatabase();
 
-const seedProducts = db.transaction(() => {
-  for (const product of products) {
-    const existing = db.prepare(
-      "SELECT id FROM products WHERE name = ?"
-    ).get(product.name);
+  const client = await pool.connect();
 
-    if (!existing) {
-      insertProduct.run(product);
+  try {
+    await client.query("BEGIN");
+
+    for (const product of products) {
+      await client.query(
+        `INSERT INTO products (name, description, price, stock, image_url)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT DO NOTHING`,
+        [
+          product.name,
+          product.description,
+          product.price,
+          product.stock,
+          product.image_url
+        ]
+      );
     }
+
+    await client.query("COMMIT");
+
+    const result = await client.query(
+      "SELECT id, name, price, stock FROM products ORDER BY id"
+    );
+
+    console.log("Sample skincare products added successfully.");
+    console.table(result.rows);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+    await pool.end();
   }
+}
+
+seedProducts().catch((error) => {
+  console.error("Product seeding failed:", error.message);
+  process.exitCode = 1;
 });
-
-seedProducts();
-
-console.log("Sample skincare products added successfully.");
-console.log(
-  db.prepare("SELECT id, name, price, stock FROM products").all()
-);
-
-db.close();

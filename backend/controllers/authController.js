@@ -1,7 +1,7 @@
 
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import db from "../config/database.js";
+import pool from "../config/database.js";
 
 function createToken(user) {
     return jwt.sign(
@@ -11,7 +11,7 @@ function createToken(user) {
     );
 }
 
-export function register(req, res) {
+export async function register(req, res) {
     const name = String(req.body?.name || "").trim();
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
@@ -23,14 +23,16 @@ export function register(req, res) {
     }
 
     try {
-        const passwordHash = bcrypt.hashSync(password, 12);
+        const passwordHash = await bcrypt.hash(password, 12);
 
-        const result = db.prepare(`
-      INSERT INTO users (name, email, password_hash)
-      VALUES (?, ?, ?)
-    `).run(name, email, passwordHash);
+        const result = await pool.query(
+            `INSERT INTO users (name, email, password_hash)
+             VALUES ($1, $2, $3)
+             RETURNING id, name, email`,
+            [name, email, passwordHash]
+        );
 
-        const user = { id: Number(result.lastInsertRowid), name, email };
+        const user = result.rows[0];
 
         return res.status(201).json({
             message: "Account created successfully.",
@@ -38,8 +40,10 @@ export function register(req, res) {
             user
         });
     } catch (error) {
-        if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
-            return res.status(409).json({ error: "An account with this email already exists." });
+        if (error.code === "23505") {
+            return res.status(409).json({
+                error: "An account with this email already exists."
+            });
         }
 
         console.error("Registration error:", error.message);
@@ -47,38 +51,55 @@ export function register(req, res) {
     }
 }
 
-export function login(req, res) {
+export async function login(req, res) {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
 
-    const user = db.prepare(`
-    SELECT id, name, email, password_hash
-    FROM users
-    WHERE email = ?
-  `).get(email);
+    try {
+        const result = await pool.query(
+            `SELECT id, name, email, password_hash
+             FROM users
+             WHERE email = $1`,
+            [email]
+        );
 
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
-        return res.status(401).json({ error: "Invalid email or password." });
+        const user = result.rows[0];
+
+        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+            return res.status(401).json({
+                error: "Invalid email or password."
+            });
+        }
+
+        return res.json({
+            message: "Login successful.",
+            token: createToken(user),
+            user: { id: user.id, name: user.name, email: user.email }
+        });
+    } catch (error) {
+        console.error("Login error:", error.message);
+        return res.status(500).json({ error: "Could not log in." });
     }
-
-    return res.json({
-        message: "Login successful.",
-        token: createToken(user),
-        user: { id: user.id, name: user.name, email: user.email }
-    });
 }
 
-export function getMe(req, res) {
-    const user = db.prepare(`
-    SELECT id, name, email, created_at
-    FROM users
-    WHERE id = ?
-  `).get(req.user.id);
+export async function getMe(req, res) {
+    try {
+        const result = await pool.query(
+            `SELECT id, name, email, created_at
+             FROM users
+             WHERE id = $1`,
+            [req.user.id]
+        );
 
-    if (!user) {
-        return res.status(404).json({ error: "Account not found." });
+        const user = result.rows[0];
+
+        if (!user) {
+            return res.status(404).json({ error: "Account not found." });
+        }
+
+        return res.json({ user });
+    } catch (error) {
+        console.error("Get account error:", error.message);
+        return res.status(500).json({ error: "Could not retrieve account." });
     }
-
-    return res.json({ user });
 }
-
