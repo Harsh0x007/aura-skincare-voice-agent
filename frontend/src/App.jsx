@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Headphones, Leaf, Mic, Phone, PhoneOff, Package, Truck, CheckCircle2, CircleAlert, Sparkles, ArrowUpRight, Volume2 } from "lucide-react";
+import AuthForm from "./components/AuthForm";
 
 const fallbackOrders = [
   { order_id: "ORD-101", customer: "Priya Sharma", product: "Vitamin C Serum (30ml)", value: 699, status: "Out for Delivery", carrier: "BlueDart", tracking_id: "BD-982103", notes: "Expected by 6 PM today" },
@@ -295,6 +296,9 @@ export default function App() {
   }
 
   const stateLabel = { idle: "Ready to connect", listening: "Listening", thinking: "Thinking", speaking: "Speaking" }[callState];
+  if (!user) {
+    return <AuthForm onLogin={setUser} />;
+  }
   return <div className="app-shell">
     <header className="topbar">
       <a className="brand" href="#"><span className="brand-mark"><Leaf size={20} /></span><span>AURA <small>SKINCARE</small></span></a>
@@ -357,5 +361,6 @@ export default function App() {
       </section>
     </main>
     <footer><div className="footer-brand"><Leaf size={15} /> AURA SKINCARE</div><span>Thoughtful care, every conversation.</span><span className="footer-demo">Assessment demo · Mock order data</span></footer>
+
   </div>;
 }
