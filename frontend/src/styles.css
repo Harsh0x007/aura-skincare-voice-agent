@@ -757,3 +757,134 @@ footer {
     padding: 0 4%;
   }
 }
+
+
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.profile-container {
+  position: relative;
+}
+
+.profile-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  border: 1px solid #deded5;
+  border-radius: 999px;
+  background: #fff;
+  color: #283c30;
+  cursor: pointer;
+  font: inherit;
+}
+
+.profile-avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #e7eee4;
+  font-weight: 700;
+}
+
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 100;
+  width: 240px;
+  padding: 14px;
+  border: 1px solid #e5e5dc;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+.profile-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+  padding-bottom: 12px;
+}
+
+.profile-details span {
+  color: #777;
+  font-size: 13px;
+}
+
+.logout-button {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: #f7e9e5;
+  color: #8b3328;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 700px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .top-meta {
+    display: none;
+  }
+
+  .header-actions {
+    margin-left: auto;
+  }
+
+  .profile-button-text {
+    display: none;
+  }
+}
+
+
+.page-nav {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border-bottom: 1px solid #e8e7dc;
+  background: #faf9f3;
+}
+
+.page-nav button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #526456;
+  padding: 10px 20px;
+  border-radius: 24px;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.page-nav button:hover {
+  background: #e9eee3;
+}
+
+.page-nav button.active {
+  background: #365841;
+  color: white;
+}
+
+.orders-page {
+  display: flex;
+  justify-content: center;
+}
+
+.orders-page > * {
+  width: 100%;
+  max-width: 900px;
+}

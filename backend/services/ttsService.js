@@ -35,15 +35,15 @@ asyncio.run(main())
 
         let errorOutput = "";
 
-        child.stderr.on("data", (chunk) => {
+        child.stderr.on("data", chunk => {
             errorOutput += chunk.toString();
         });
 
-        child.on("error", (error) => {
+        child.on("error", error => {
             reject(error);
         });
 
-        child.on("close", async (code) => {
+        child.on("close", async code => {
             try {
                 if (code !== 0) {
                     throw new Error(errorOutput || "Speech generation failed");
@@ -54,7 +54,7 @@ asyncio.run(main())
             } catch (error) {
                 reject(error);
             } finally {
-                await unlink(outputPath).catch(() => { });
+                await unlink(outputPath).catch(() => {});
             }
         });
 

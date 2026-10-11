@@ -2,6 +2,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import db from "./config/database.js";
+import authMiddleware from "./middleware/authMiddleware.js";
 
 import authRoutes from "./routes/authRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
@@ -32,44 +34,137 @@ app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/tts", ttsRoutes);
 
-const instructions = `
-You are Aria, a friendly, professional and concise Indian customer
-support specialist for Aura Skincare, a premium organic Indian
-skincare brand.
 
-Answer in natural, concise English. Understand Hinglish if possible.
-Only help with Aura Skincare products, orders, shipping, returns,
-refunds, cancellations and payment policies. Politely decline
-unrelated requests.
+const instructions = `
+You are Aria, a friendly, professional, concise customer support
+specialist for Aura Skincare, a premium organic Indian skincare brand.
+YOUR ROLE:
+- Help only with Aura Skincare products, orders, shipping, returns,
+  refunds, cancellations, and payment policies.
+- Politely decline unrelated requests.
+- Understand English and Hinglish.
+- Use natural, simple Indian English.
+- Keep answers concise and easy to understand.
+- Answer the customer's actual question directly.
+STRICT RESPONSE FORMATTING:
+- Output plain text only. Never use Markdown.
+- Never output asterisks, including * or **.
+- Never use Markdown headings, bullet lists, or bold formatting.
+- Use simple labels followed by a colon.
+- When listing multiple orders, use plain text labels such as
+  Order 1, Order 2, and Order 3.
+- Put each detail on a separate line when appropriate.
+- Do not output formatting instructions or explain these rules.
+- Do not include unnecessary introductions or repeated conclusions.
+- Make responses suitable for both displaying in the transcript
+  and reading aloud using text-to-speech.
+DATABASE ACCURACY:
+- Use the current request context as the source of truth for orders.
+- Never invent, modify, or guess order IDs, products, quantities,
+  prices, totals, payment details, or order statuses.
+- Use the order total supplied by the backend exactly as provided.
+- Never recalculate, multiply, or add zeros to a supplied total.
+- Do not confuse rupees with paise.
+- If a required detail is missing, say it is unavailable.
+- Never use another customer's order information.
+- Do not describe demo orders as real customer orders.
+ORDER HISTORY:
+- When the customer asks for all orders, previous orders, or order
+  history, list every order included in the current request context.
+- For each order, include its order ID, items and quantities,
+  total amount, status, payment method, and payment status when
+  those details are available.
+- Do not omit an order included in the supplied context.
+- Do not invent tracking numbers or delivery dates.
+- Do not include the delivery address in a general order summary.
+- Keep the response concise and avoid unnecessary policy explanations.
+- If no real orders are supplied, explain that no order details
+  are currently available for the customer's account.
+DELIVERY ADDRESS PRIVACY:
+- Never reveal, repeat, or read out a delivery address when the
+  customer asks about order history, order status, order totals,
+  payment details, or general order information.
+- Only provide a delivery address when the customer explicitly
+  asks to view or confirm their delivery address.
+- Do not volunteer personal information that is not necessary
+  to answer the customer's question.
+
+ORDER STATUS AND CANCELLATION:
+- Report order statuses exactly as supplied by the database.
+- Orders with status Processing may qualify for cancellation under
+  the cancellation policy.
+- Shipped and Out for Delivery orders cannot be cancelled under
+  the standard policy.
+- Do not say every order is eligible for cancellation.
+- Only discuss cancellation eligibility when relevant to the question.
+- This application does not currently perform real cancellations
+  or issue refunds.
+- Never claim or imply that you have cancelled an order, initiated
+  a refund, or completed an action.
+- Never ask the customer to confirm a cancellation that the
+  application cannot actually perform.
+- If the customer asks to cancel an order, explain the applicable
+  policy honestly and clarify that cancellation cannot be completed
+  through the current application.
+- Never promise a cancellation or refund.
 
 POLICIES:
-- Free delivery on orders above ₹499.
+- Orders above ₹499 qualify for free delivery.
 - Orders below ₹499 have a ₹50 shipping fee.
 - Standard delivery takes 3–5 business days.
 - Returns are accepted within 7 days of delivery for unopened,
-  unused products in original packaging.
+  unused products in their original packaging.
 - Damaged or defective products must be reported within 48 hours
   of delivery with photos for replacement.
-- Orders can be cancelled only while status is Processing.
-- Shipped or Out for Delivery orders cannot be cancelled.
-  Customers may refuse delivery at the doorstep.
-- COD is available for orders up to ₹2,500, payable by cash or UPI
-  at the doorstep.
+- Orders can be cancelled only while their status is Processing.
+- Shipped and Out for Delivery orders cannot be cancelled under
+  the standard policy. Customers may refuse delivery at the doorstep.
+- Cash on Delivery is available for orders up to ₹2,500.
+- COD payments can be made by cash or UPI at the doorstep.
+- Apply the same delivery policy regardless of payment method.
+- Do not add a shipping fee to an existing order total unless the
+  backend data or the customer's actual checkout calculation supports it.
+- Do not unnecessarily repeat policies when the customer only asks
+  for an order status, order total, or list of orders.
 
-ORDER SAFETY:
-- Use only order information supplied in CURRENT REQUEST CONTEXT.
-- Never invent order details, delivery dates, tracking IDs, refunds,
-  or actions.
-- These three sample orders are DEMO DATA, not live shipments.
-- ORD-101 is Out for Delivery and cannot be cancelled.
-- ORD-102 was delivered 14 days ago, outside the standard 7-day
-  return window.
-- ORD-103 is Processing and may be eligible for cancellation.
-  The demo cannot actually cancel orders or issue refunds.
-- Never claim to have completed a cancellation or refund.
-- If an order is not found in the supplied context, say so honestly.
-- Do not describe demo order information as verified live database data.
-`;
+SPOKEN CURRENCY:
+- Speak currency naturally in Indian English.
+- For example, ₹120 means one hundred and twenty rupees.
+- ₹1,048 means one thousand and forty-eight rupees.
+- ₹699 means six hundred and ninety-nine rupees.
+- Never say currency amounts digit by digit.
+- Never say formatting symbols aloud.
+REAL ORDERS AND DEMO ORDERS:
+- Treat authenticated customer's database orders as real orders.
+- Treat ORD-101, ORD-102, and ORD-103 as demo records only.
+- ORD-101 is Out for Delivery and cannot be cancelled under policy.
+- ORD-102 was delivered 14 days ago and is outside the standard
+  7-day return window.
+- ORD-103 is Processing and may qualify for cancellation under policy.
+- Demo records do not represent verified live shipments.
+- The demo cannot actually cancel orders or issue refunds.
+- Only use demo information when it is explicitly provided in the
+  current request context.
+- Never mix demo records with the customer's real order history.
+
+FINAL RESPONSE CHECK:
+Before answering, verify that:
+- The answer addresses the customer's actual question.
+- Every order detail matches the supplied data.
+- The total amount has not been changed or recalculated.
+- No delivery address is included unless explicitly requested.
+- No cancellation or refund is falsely claimed.
+- The response contains no asterisks or Markdown formatting.
+- The response is concise, natural, and easy to speak aloud.
+
+VOICE RESPONSE LENGTH:
+- For a current-order question, give the order ID, total, status,
+  and payment status.
+- Do not include the delivery address unless explicitly requested.
+- Avoid greetings, repeated conclusions, and unnecessary questions.
+- Keep routine order-status answers to 2–4 short sentences.
+- For order-history requests, summarize every order concisely.
+  `;
 
 const demoOrders = {
   "ORD-101": {
@@ -124,7 +219,8 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.post("/api/chat", async (req, res) => {
+
+app.post("/api/chat", authMiddleware, async (req, res) => {
   const message = String(req.body?.message || "").trim();
 
   const history = Array.isArray(req.body?.history)
@@ -137,40 +233,135 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
-  const orderId = extractOrderId(message);
-
   const asksAboutOrder =
-    /\b(order|delivery|deliver|tracking|track|cancel|cancellation|where is|status|shipment)\b/i.test(
+    /\b(order|orders|delivery|deliver|tracking|track|cancel|cancellation|where is|status|shipment|current|latest|recent)\b/i.test(
       message
     );
 
-  let orderContext =
-    "No order lookup was requested in this message.";
+  const requestedDemoId = extractOrderId(message);
+  let orderId = null;
+  let orderContext = "No order lookup was requested.";
 
   if (asksAboutOrder) {
-    if (!orderId) {
-      orderContext =
-        "The customer is asking about an order but has not " +
-        "provided a recognizable order ID. Ask for the order ID. " +
-        "Do not invent order details.";
-    } else {
-      const order = demoOrders[orderId];
+    try {
+      // Only retrieve orders belonging to the authenticated customer.
+      const customerOrders = db.prepare(`
+        SELECT
+          order_id, total_amount, status,
+          payment_method, payment_status,
+          delivery_address, created_at
+        FROM orders
+        WHERE user_id = ?
+        ORDER BY id DESC
+      `).all(req.user.id);
 
-      if (order) {
-        orderContext =
-          `The customer mentioned demo order ${orderId}. ` +
-          "Here are the available sample details: " +
-          JSON.stringify(order) +
-          ". These details are hardcoded assessment demo data, " +
-          "not a live database lookup or live shipment. " +
-          "Answer using these details only. Do not claim to have " +
-          "performed a cancellation or refund.";
-      } else {
-        orderContext =
-          `No matching demo order was found for ${orderId}. ` +
-          "Tell the customer the demo order was not found. " +
-          "Do not invent details.";
+      let selectedOrder = null;
+
+      // Prefer a real order ID if the customer explicitly provides one.
+      const spokenId = message.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+      if (spokenId) {
+        selectedOrder = customerOrders.find((order) => {
+          const savedId = order.order_id.toUpperCase().replace(/[^A-Z0-9]/g, "");
+          return spokenId.includes(savedId);
+        });
       }
+
+      // For "my current/latest order", use the most recent real order.
+
+      if (customerOrders.length > 0) {
+        // Load items for every order belonging to this authenticated customer.
+        const ordersWithItems = customerOrders.map((order) => {
+          const items = db.prepare(`
+      SELECT product_name, quantity, unit_price
+      FROM order_items
+      WHERE order_id = (
+        SELECT id FROM orders
+        WHERE order_id = ? AND user_id = ?
+      )
+    `).all(order.order_id, req.user.id);
+
+          return {
+            ...order,
+            total_amount_rupees: `₹${(order.total_amount / 100).toLocaleString("en-IN", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`,
+            items: items.map((item) => ({
+              product: item.product_name,
+              quantity: item.quantity,
+              unit_price_rupees: (item.unit_price / 100).toFixed(2),
+            })),
+          };
+        });
+
+        const normalizedMessage = message.toLowerCase();
+        const asksForAllOrders =
+          /\b(all|both|every|previous|past|history|list|how many)\b/.test(normalizedMessage);
+
+        const spokenId = message.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const matchedOrder = customerOrders.find((order) => {
+          const savedId = order.order_id.toUpperCase().replace(/[^A-Z0-9]/g, "");
+          return spokenId.includes(savedId);
+        });
+
+        if (matchedOrder) {
+          orderId = matchedOrder.order_id;
+          orderContext = `
+The customer asked about a specific REAL order.
+Use this database record as the source of truth:
+${JSON.stringify(ordersWithItems.find((order) => order.order_id === matchedOrder.order_id))}
+`;
+        } else if (asksForAllOrders) {
+          orderContext = `
+The customer is asking about their order history.
+Here are ALL REAL orders belonging to the authenticated customer:
+${JSON.stringify(
+            ordersWithItems.map(
+              ({ delivery_address, ...order }) => order
+            )
+          )}
+There are ${ordersWithItems.length} real orders.
+List each order separately with its order ID, items, total and status.
+Do not omit orders. Do not invent orders, tracking numbers or delivery dates.
+`;
+        } else {
+          const latestOrder = ordersWithItems[0];
+          orderId = latestOrder.order_id;
+          orderContext = `
+The customer's latest REAL order is:
+
+${JSON.stringify(
+            (({ delivery_address, ...order }) => order)(latestOrder)
+          )}
+Use this record for questions about their current or latest order.
+Do not invent tracking numbers or delivery dates.
+Never claim an order was cancelled, refunded or delivered unless the database confirms it.
+`;
+        }
+      } else if (requestedDemoId && demoOrders[requestedDemoId]) {
+        orderId = requestedDemoId;
+        orderContext = `
+The customer has no real orders in their account.
+They mentioned this DEMO order:
+${JSON.stringify(demoOrders[requestedDemoId])}
+These are sample records, not real customer orders.
+Clearly identify them as demo data. Never claim to perform an action.
+`;
+      } else {
+        orderContext = `
+No real orders were found in the authenticated customer's account.
+Do not invent an order or use another customer's data.
+Explain that no order is currently available in their account.
+`;
+      }
+
+    } catch (error) {
+      console.error("Customer order lookup error:", error.message);
+
+      return res.status(500).json({
+        error: "Could not retrieve your order details.",
+      });
     }
   }
 
@@ -198,6 +389,7 @@ app.post("/api/chat", async (req, res) => {
                 ["user", "assistant"].includes(item?.role) &&
                 typeof item?.content === "string"
             )
+            .slice(-6)
             .map((item) => ({
               role: item.role,
               content: item.content,
@@ -210,6 +402,8 @@ app.post("/api/chat", async (req, res) => {
         ],
         options: {
           temperature: 0.2,
+          num_ctx: 4096,
+          num_predict: 220,
         },
       }),
     });
@@ -224,12 +418,30 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    const reply = data?.message?.content?.trim();
+
+    const rawReply = data?.message?.content;
+
+    const reply =
+      typeof rawReply === "string"
+        ? rawReply
+          .replace(/\*\*/g, "")
+          .replace(/(?<!\*)\*(?!\*)/g, "")
+          .trim()
+        : "";
+
+    if (!reply) {
+      console.error("Unexpected Ollama response:", data);
+
+      return res.status(502).json({
+        error: "The local AI returned an empty response. Please try again.",
+      });
+    }
+
+
 
     if (!reply) {
       return res.status(502).json({
-        error:
-          "The local AI returned an empty response. Please try again.",
+        error: "The local AI returned an empty response. Please try again.",
       });
     }
 
@@ -242,8 +454,7 @@ app.post("/api/chat", async (req, res) => {
     console.error("Ollama chat error:", error.message);
 
     return res.status(503).json({
-      error:
-        "Cannot reach Ollama. Check that Ollama is running.",
+      error: "Cannot reach Ollama. Check that Ollama is running.",
     });
   }
 });
@@ -251,6 +462,6 @@ app.post("/api/chat", async (req, res) => {
 app.listen(PORT, () => {
   console.log(
     `Aura backend listening on http://localhost:${PORT} ` +
-      `(Ollama model: ${OLLAMA_MODEL})`
+    `(Ollama model: ${OLLAMA_MODEL})`
   );
 });

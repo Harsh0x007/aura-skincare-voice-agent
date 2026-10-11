@@ -4,6 +4,7 @@ import AuthForm from "./components/AuthForm";
 import OrderPanel from "./components/OrderPanel";
 import CallSummary from "./components/CallSummary";
 import VoiceAssistant from "./components/VoiceAssistant";
+import ProductShop from "./components/ProductShop";
 
 const fallbackOrders = [
   { order_id: "ORD-101", customer: "Priya Sharma", product: "Vitamin C Serum (30ml)", value: 699, status: "Out for Delivery", carrier: "BlueDart", tracking_id: "BD-982103", notes: "Expected by 6 PM today" },
@@ -14,6 +15,8 @@ const fallbackOrders = [
 export default function App() {
   const [callState, setCallState] = useState("idle");
   const [user, setUser] = useState(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [activePage, setActivePage] = useState("assistant");
   const [authChecking, setAuthChecking] = useState(true);
   const [authMode, setAuthMode] = useState("login");
   const [authName, setAuthName] = useState("");
@@ -35,6 +38,11 @@ export default function App() {
   const speakingRef = useRef(false);
   const interruptRecognitionRef = useRef(null);
   const speechResolveRef = useRef(null);
+
+  const audioRef = useRef(null);
+  const audioUrlRef = useRef(null);
+  const speechRequestRef = useRef(0);
+  const callSessionRef = useRef(0);
 
 
   useEffect(() => {
@@ -111,10 +119,66 @@ export default function App() {
     }
   }
 
+  function handleLogout() {
+    stopListening();
+    window.speechSynthesis?.cancel();
+
+    localStorage.removeItem("aura_token");
+
+    setUser(null);
+    setTranscript([]);
+    transcriptRef.current = [];
+    setOrders([]);
+    setSummary(null);
+    setLookupResult(null);
+    setError("");
+    setAuthError("");
+    setAuthMode("login");
+  }
+
+
   useEffect(() => {
-    fetch("/api/orders").then(r => r.ok ? r.json() : fallbackOrders).then(setOrders).catch(() => setOrders(fallbackOrders));
-    return () => { shouldListenRef.current = false; try { recognitionRef.current?.stop(); } catch { } window.speechSynthesis?.cancel(); };
-  }, []);
+    async function loadOrders() {
+      const token = localStorage.getItem("aura_token");
+
+      if (!token) {
+        setOrders([]);
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/orders/my", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error("Could not load your orders.");
+        }
+
+        const data = await response.json();
+        setOrders(data.orders || []);
+      } catch (error) {
+        console.error("Order loading error:", error);
+        setOrders([]);
+      }
+    }
+
+    if (user) {
+      loadOrders();
+    } else {
+      setOrders([]);
+    }
+
+    return () => {
+      shouldListenRef.current = false;
+      try {
+        recognitionRef.current?.stop();
+      } catch { }
+      window.speechSynthesis?.cancel();
+    };
+  }, [user]);
 
   function addTranscript(role, text) {
     if (!text?.trim()) return;
@@ -163,100 +227,275 @@ export default function App() {
   async function sendMessage(rawMessage) {
     const message = String(rawMessage || "").trim();
     if (!message || busyRef.current) return;
+
     busyRef.current = true;
-    try { recognitionRef.current?.stop(); } catch { }
+    const sessionId = callSessionRef.current;
+
+    try {
+      recognitionRef.current?.stop();
+    } catch { }
+
     setError("");
     addTranscript("customer", message);
     setCallState("thinking");
-    const history = transcriptRef.current.slice(0, -1).map(item => ({ role: item.role === "aria" ? "assistant" : "user", content: item.text }));
-    try {
 
+    const history = transcriptRef.current
+      .slice(0, -1)
+      .map((item) => ({
+        role: item.role === "aria" ? "assistant" : "user",
+        content: item.text,
+      }));
+
+    try {
       const token = localStorage.getItem("aura_token");
 
+      console.time("Aria: chat request");
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ message, history })
+        body: JSON.stringify({ message, history }),
       });
+      console.timeEnd("Aria: chat request");
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not get an AI response.");
-      const reply = data.reply || "I'm sorry, I couldn't prepare a response. Please try again.";
+      // Ignore responses from a call that has already ended.
+      if (sessionId !== callSessionRef.current) return;
+
+      const responseText = await response.text();
+
+      if (sessionId !== callSessionRef.current) return;
+
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(
+          `Chat server returned an invalid response (HTTP ${response.status}). Check the backend terminal.`
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || `Chat request failed (HTTP ${response.status}).`
+        );
+      }
+
+      if (sessionId !== callSessionRef.current) return;
+
+      const reply =
+        data.reply ||
+        "I'm sorry, I couldn't prepare a response. Please try again.";
+
+      console.log("Aria reply sent to voice:", reply);
+
       addTranscript("aria", reply);
       setCallState("speaking");
+
+      if (sessionId !== callSessionRef.current) return;
+
+      console.time("Aria: voice generation and playback");
       await speak(reply);
-    } catch (e) {
-      const msg = e.message || "Could not reach the local AI.";
-      setError(msg);
-      addTranscript("aria", "I'm sorry, I'm having trouble answering right now. Please try again.");
+      console.timeEnd("Aria: voice generation and playback");
+    } catch (error) {
+      if (sessionId !== callSessionRef.current) return;
+
+      setError(error.message || "Could not reach the local AI.");
+      addTranscript(
+        "aria",
+        "I'm sorry, I'm having trouble answering right now. Please try again."
+      );
     } finally {
       busyRef.current = false;
-      if (shouldListenRef.current) beginListening();
-      else setCallState("idle");
+
+      // Never restart listening for an ended or replaced call.
+      if (sessionId !== callSessionRef.current) return;
+
+      if (shouldListenRef.current) {
+        beginListening();
+      } else {
+        setCallState("idle");
+      }
     }
   }
 
 
-  async function speak(text) {
-    const safeText = String(text || "").trim();
-    if (!safeText) return;
 
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
+
+  function stopAriaAudio() {
+    // Invalidate any audio request still being generated.
+    speechRequestRef.current += 1;
+
+    const audio = audioRef.current;
+    const audioUrl = audioUrlRef.current;
+
+    // Clear references first so another call can start safely.
+    audioRef.current = null;
+    audioUrlRef.current = null;
+    speakingRef.current = false;
+
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.onpause = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
     }
+
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+
+    // Resolve any playback promise waiting for audio to finish.
+    if (speechResolveRef.current) {
+      const resolve = speechResolveRef.current;
+      speechResolveRef.current = null;
+      resolve();
+    }
+  }
+
+
+
+  async function speak(text, isGreeting = false) {
+    stopAriaAudio();
+
+    const requestId = speechRequestRef.current;
+    const safeText = String(text || "")
+      .replace(/\bsuperscript\b/gi, "")
+      .replace(/₹\s*([\d,]+(?:\.\d{1,2})?)/g, "$1 rupees")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!safeText) return;
 
     speakingRef.current = true;
 
+    const ttsStartedAt = performance.now();
     try {
-      const response = await fetch("/api/tts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: safeText }),
-      });
+      const response = isGreeting
+        ? await fetch("/api/tts/greeting")
+        : await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: safeText }),
+        });
+      console.log(
+        `Aria TTS: server response in ${((performance.now() - ttsStartedAt) / 1000).toFixed(2)}s`
+      );
+
+      // End Call or another speech request may have happened during fetch.
+      if (requestId !== speechRequestRef.current) return;
 
       if (!response.ok) {
         throw new Error("Failed to generate AI voice");
       }
 
       const audioBlob = await response.blob();
+      console.log(
+        `Aria TTS: audio download complete in ${((performance.now() - ttsStartedAt) / 1000).toFixed(2)}s`,
+        `Size: ${(audioBlob.size / 1024).toFixed(1)} KB`
+      );
+
+      if (requestId !== speechRequestRef.current) return;
+
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
 
-      try {
-        await new Promise((resolve, reject) => {
-          audio.onended = resolve;
-          audio.onerror = () => reject(new Error("Audio playback failed"));
+      audioRef.current = audio;
+      audioUrlRef.current = audioUrl;
 
-          audio.play().catch(reject);
-        });
-      } finally {
-        audio.pause();
-        URL.revokeObjectURL(audioUrl);
-      }
+      await new Promise((resolve, reject) => {
+        let settled = false;
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+
+          if (speechResolveRef.current === finish) {
+            speechResolveRef.current = null;
+          }
+
+          resolve();
+        };
+
+        speechResolveRef.current = finish;
+        audio.onended = finish;
+        audio.onpause = finish;
+        audio.onerror = () => {
+          if (requestId === speechRequestRef.current) {
+            reject(new Error("Audio playback failed"));
+          } else {
+            finish();
+          }
+        };
+
+        audio.play().catch(reject);
+      });
     } catch (error) {
-      console.error("Aura voice error:", error);
+      if (requestId === speechRequestRef.current) {
+        console.error("Aura voice error:", error);
+      }
     } finally {
-      speakingRef.current = false;
+      // Only clean up this request's audio, never a newer request.
+      if (requestId === speechRequestRef.current) {
+        const audio = audioRef.current;
+        const audioUrl = audioUrlRef.current;
+
+        audioRef.current = null;
+        audioUrlRef.current = null;
+        speakingRef.current = false;
+
+        if (audio) {
+          audio.onended = null;
+          audio.onerror = null;
+          audio.onpause = null;
+          audio.pause();
+        }
+
+        if (audioUrl) URL.revokeObjectURL(audioUrl);
+      }
     }
   }
 
+
+
   async function startCall() {
-    setError(""); setSummary(null); setTranscript([]); transcriptRef.current = [];
+    callSessionRef.current += 1;
+    stopAriaAudio();
+    busyRef.current = false;
+    setError("");
+    setSummary(null);
+    setTranscript([]);
+    transcriptRef.current = [];
+
     shouldListenRef.current = true;
     setCallState("thinking");
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) setError("This browser may not support voice recognition. You can still use the message box below.");
-    addTranscript("aria", "Hello! I'm Aria from Aura Skincare. How can I help you today?");
-    await speak("Hello! I'm Aria from Aura Skincare. How can I help you today?");
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setError(
+        "This browser may not support voice recognition. You can still use the message box below."
+      );
+    }
+
+    const greeting =
+      "Hello! I'm Aria from Aura Skincare. How can I help you today?";
+
+    addTranscript("aria", greeting);
+
+    await speak(greeting, true);
+
     if (shouldListenRef.current) beginListening();
   }
 
+
   function endCall() {
+    callSessionRef.current += 1;
+    stopAriaAudio();
     stopListening();
     window.speechSynthesis?.cancel();
     busyRef.current = false;
@@ -276,12 +515,51 @@ export default function App() {
   async function submitTypedMessage(e) { e.preventDefault(); const message = typedMessage; setTypedMessage(""); await sendMessage(message); }
 
   async function lookupOrder(e) {
-    e.preventDefault(); setLookupResult(null); setError("");
+    e.preventDefault();
+    setLookupResult(null);
+    setError("");
+
+    const token = localStorage.getItem("aura_token");
+
+    if (!token) {
+      setLookupResult({ error: "Please log in to check your orders." });
+      return;
+    }
+
+    const requestedId = lookupId.trim().toUpperCase();
+
+    if (!requestedId) {
+      setLookupResult({ error: "Please enter an order ID." });
+      return;
+    }
+
     try {
-      const res = await fetch("/api/orders/lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order_id: lookupId }) });
-      const data = await res.json();
-      setLookupResult(res.ok ? data : { error: data.error || "Order not found" });
-    } catch { setLookupResult({ error: "Backend is not running. Start the backend terminal first." }); }
+      const response = await fetch("/api/orders/my", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not load your orders.");
+      }
+
+      const matchedOrder = (data.orders || []).find(
+        (order) => order.order_id.toUpperCase() === requestedId
+      );
+
+      setLookupResult(
+        matchedOrder
+          ? matchedOrder
+          : { error: "No order with that ID was found in your account." }
+      );
+    } catch (error) {
+      setLookupResult({
+        error: error.message || "Could not connect to the backend.",
+      });
+    }
   }
 
   const stateLabel = { idle: "Ready to connect", listening: "Listening", thinking: "Thinking", speaking: "Speaking" }[callState];
@@ -293,11 +571,91 @@ export default function App() {
     return <AuthForm onLogin={setUser} />;
   }
   return <div className="app-shell">
+
     <header className="topbar">
-      <a className="brand" href="#"><span className="brand-mark"><Leaf size={20} /></span><span>AURA <small>SKINCARE</small></span></a>
-      <div className="top-meta"><span className="online-dot" /> AI CUSTOMER CARE <span className="top-divider" /> DEMO ENVIRONMENT</div>
-      <button className="help-button" onClick={() => window.open("https://www.aad.org/public/everyday-care/skin-care-basics", "_blank")}><span>Skin care guide</span><ArrowUpRight size={15} /></button>
+      <a className="brand" href="#">
+        <span className="brand-mark"><Leaf size={20} /></span>
+        <span>AURA <small>SKINCARE</small></span>
+      </a>
+
+      <div className="top-meta">
+        <span className="online-dot" />
+        AI CUSTOMER CARE
+        <span className="top-divider" />
+        DEMO ENVIRONMENT
+      </div>
+
+      <div className="header-actions">
+        <button
+          className="help-button"
+          onClick={() =>
+            window.open(
+              "https://www.aad.org/public/everyday-care/skin-care-basics",
+              "_blank"
+            )
+          }
+        >
+          <span>Skin care guide</span>
+          <ArrowUpRight size={15} />
+        </button>
+
+        <div className="profile-container">
+          <button
+            className="profile-button"
+            onClick={() => setProfileOpen((open) => !open)}
+            aria-expanded={profileOpen}
+          >
+            <span className="profile-avatar">
+              {(user?.name || user?.email || "U").charAt(0).toUpperCase()}
+            </span>
+            <span className="profile-button-text">
+              {user?.name || "My Profile"}
+            </span>
+          </button>
+
+          {profileOpen && (
+            <div className="profile-menu">
+              <div className="profile-details">
+                <strong>{user?.name || "Customer"}</strong>
+                <span>{user?.email || ""}</span>
+              </div>
+
+              <button
+                className="logout-button"
+                onClick={handleLogout}
+              >
+                <span>Log out</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </header>
+
+    <nav className="page-nav">
+      <button
+        className={activePage === "assistant" ? "active" : ""}
+        onClick={() => setActivePage("assistant")}
+      >
+        AI Assistant
+      </button>
+
+      <button
+        className={activePage === "shop" ? "active" : ""}
+        onClick={() => setActivePage("shop")}
+      >
+        Shop
+      </button>
+
+      <button
+        className={activePage === "orders" ? "active" : ""}
+        onClick={() => setActivePage("orders")}
+      >
+        My Orders
+      </button>
+    </nav>
+
+
 
     <main>
       <section className="hero">
@@ -307,29 +665,67 @@ export default function App() {
       </section>
 
 
-      <section className="workspace">
-        <div className="main-column">
-          <VoiceAssistant
-            callState={callState}
-            stateLabel={stateLabel}
-            startCall={startCall}
-            endCall={endCall}
-            typedMessage={typedMessage}
-            setTypedMessage={setTypedMessage}
-            submitTypedMessage={submitTypedMessage}
-            error={error}
-          />
-          <CallSummary transcript={transcript} summary={summary} />
-        </div>
+      {activePage === "assistant" && (
+        <section className="workspace">
+          <div className="main-column">
+            <VoiceAssistant
+              callState={callState}
+              stateLabel={stateLabel}
+              startCall={startCall}
+              endCall={endCall}
+              typedMessage={typedMessage}
+              setTypedMessage={setTypedMessage}
+              submitTypedMessage={submitTypedMessage}
+              error={error}
+            />
+            <CallSummary transcript={transcript} summary={summary} />
+          </div>
 
-        <OrderPanel
-          orders={orders}
-          lookupOrder={lookupOrder}
-          lookupId={lookupId}
-          setLookupId={setLookupId}
-          lookupResult={lookupResult}
+          <OrderPanel
+            orders={orders}
+            lookupOrder={lookupOrder}
+            lookupId={lookupId}
+            setLookupId={setLookupId}
+            lookupResult={lookupResult}
+          />
+        </section>
+      )}
+
+      {activePage === "shop" && (
+        <ProductShop
+          onOrderPlaced={async () => {
+            const token = localStorage.getItem("aura_token");
+            const response = await fetch("/api/orders/my", {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            });
+
+            if (!response.ok) {
+              throw new Error("Could not refresh your orders.");
+            }
+
+            const data = await response.json();
+            setOrders(data.orders || []);
+            setLookupResult(null);
+          }}
         />
-      </section>
+      )}
+
+      {activePage === "orders" && (
+        <section className="workspace orders-page">
+          <OrderPanel
+            orders={orders}
+            lookupOrder={lookupOrder}
+            lookupId={lookupId}
+            setLookupId={setLookupId}
+            lookupResult={lookupResult}
+          />
+        </section>
+      )}
+
+
+
 
     </main>
     <footer><div className="footer-brand"><Leaf size={15} /> AURA SKINCARE</div><span>Thoughtful care, every conversation.</span><span className="footer-demo">Assessment demo · Mock order data</span></footer>
