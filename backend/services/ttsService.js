@@ -31,7 +31,11 @@ asyncio.run(main())
 `;
 
         const outputPath = join(tmpdir(), `aura-${randomUUID()}.mp3`);
-        const child = spawn("py", ["-c", pythonCode, outputPath]);
+        const pythonCommand =
+            process.env.PYTHON_COMMAND ||
+            (process.platform === "win32" ? "py" : "python3");
+
+        const child = spawn(pythonCommand, ["-c", pythonCode, outputPath]);
 
         let errorOutput = "";
 
@@ -54,7 +58,7 @@ asyncio.run(main())
             } catch (error) {
                 reject(error);
             } finally {
-                await unlink(outputPath).catch(() => {});
+                await unlink(outputPath).catch(() => { });
             }
         });
 
