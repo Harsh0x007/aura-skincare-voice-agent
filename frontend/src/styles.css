@@ -104,9 +104,13 @@ button:disabled {
 }
 .hero {
   padding: 56px 7% 42px;
-  background:
-    radial-gradient(ellipse at 80% 10%, #e8eadc 0, transparent 42%), #f5f4ed;
+  background: radial-gradient(
+    ellipse at 80% 10%,
+    #e8eadc 0,
+    transparent 42%
+  ), #f5f4ed;
 }
+
 .eyebrow,
 .mini-label {
   display: flex;
@@ -270,12 +274,14 @@ button:disabled {
   background: #d9ded4;
   transition: height 0.2s;
 }
+
 .waveform span.active {
-  height: calc(5px + (var(--i) % 7) * 3px);
+  height: calc(5px + var(--i) * 3px);
   background: #8aa084;
   animation: wave 0.8s ease-in-out infinite alternate;
   animation-delay: calc(var(--i) * -0.035s);
 }
+
 @keyframes wave {
   to {
     transform: scaleY(0.45);
