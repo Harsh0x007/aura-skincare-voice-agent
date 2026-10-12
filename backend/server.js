@@ -369,98 +369,94 @@ Explain that no order is currently available in their account.
     }
   }
 
+
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        stream: false,
-        messages: [
-          {
-            role: "system",
-            content:
-              instructions +
-              "\n\nCURRENT REQUEST CONTEXT:\n" +
-              orderContext,
-          },
+    const groqModel =
+      process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 
-          ...history
-            .filter(
-              (item) =>
-                ["user", "assistant"].includes(item?.role) &&
-                typeof item?.content === "string"
-            )
-            .slice(-6)
-            .map((item) => ({
-              role: item.role,
-              content: item.content,
-            })),
-
-          {
-            role: "user",
-            content: message,
-          },
-        ],
-        options: {
-          temperature: 0.2,
-          num_ctx: 4096,
-          num_predict: 220,
+    const response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.GROQ_API}`,
         },
-      }),
-    });
+        body: JSON.stringify({
+          model: groqModel,
+          messages: [
+            {
+              role: "system",
+              content:
+                instructions +
+                "\n\nCURRENT REQUEST CONTEXT:\n" +
+                orderContext,
+            },
+            ...history
+              .filter(
+                (item) =>
+                  ["user", "assistant"].includes(item?.role) &&
+                  typeof item?.content === "string"
+              )
+              .slice(-6)
+              .map((item) => ({
+                role: item.role,
+                content: item.content,
+              })),
+            {
+              role: "user",
+              content: message,
+            },
+          ],
+          temperature: 0.2,
+          max_tokens: 220,
+        }),
+      }
+    );
 
     const data = await response.json();
 
     if (!response.ok) {
+      console.error("Groq API error:", response.status, data);
+
       return res.status(502).json({
         error:
-          data?.error ||
-          "Ollama request failed. Check that Ollama is running.",
+          data?.error?.message ||
+          "The AI provider could not complete your request.",
       });
     }
 
-
-    const rawReply = data?.message?.content;
+    const rawReply = data?.choices?.[0]?.message?.content;
 
     const reply =
       typeof rawReply === "string"
         ? rawReply
-          .replace(/\*\*/g, "")
-          .replace(/(?<!\*)\*(?!\*)/g, "")
-          .trim()
+            .replace(/\*\*/g, "")
+            .replace(/(?<!\*)\*(?!\*)/g, "")
+            .trim()
         : "";
 
     if (!reply) {
-      console.error("Unexpected Ollama response:", data);
+      console.error("Unexpected Groq response:", data);
 
       return res.status(502).json({
-        error: "The local AI returned an empty response. Please try again.",
-      });
-    }
-
-
-
-    if (!reply) {
-      return res.status(502).json({
-        error: "The local AI returned an empty response. Please try again.",
+        error: "The AI returned an empty response. Please try again.",
       });
     }
 
     return res.json({
       reply,
       order_id: orderId,
-      model: OLLAMA_MODEL,
+      model: groqModel,
     });
   } catch (error) {
-    console.error("Ollama chat error:", error.message);
+    console.error("Groq chat error:", error.message);
 
     return res.status(503).json({
-      error: "Cannot reach Ollama. Check that Ollama is running.",
+      error: "Cannot reach the hosted AI provider. Please try again.",
     });
   }
+
 });
 
 
