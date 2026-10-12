@@ -409,7 +409,7 @@ Explain that no order is currently available in their account.
             },
           ],
           temperature: 0.2,
-          max_tokens: 220,
+          max_tokens: 1000,
         }),
       }
     );

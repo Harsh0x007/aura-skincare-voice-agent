@@ -359,10 +359,12 @@ export default function App() {
 
 
 
+
   async function speak(text, isGreeting = false) {
     stopAriaAudio();
 
     const requestId = speechRequestRef.current;
+
     const safeText = String(text || "")
       .replace(/\bsuperscript\b/gi, "")
       .replace(/₹\s*([\d,]+(?:\.\d{1,2})?)/g, "$1 rupees")
@@ -373,41 +375,39 @@ export default function App() {
 
     speakingRef.current = true;
 
-    const ttsStartedAt = performance.now();
-    try {
-      const response = isGreeting
-        ? await fetch(`${API_BASE_URL}/api/tts/greeting`)
-        : await fetch(`${API_BASE_URL}/api/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: safeText }),
-        });
-      console.log(
-        `Aria TTS: server response in ${((performance.now() - ttsStartedAt) / 1000).toFixed(2)}s`
-      );
+    // Use browser speech when server TTS fails.
 
-      // End Call or another speech request may have happened during fetch.
-      if (requestId !== speechRequestRef.current) return;
+    const speakWithBrowser = () =>
+      new Promise((resolve) => {
+        if (
+          !("speechSynthesis" in window) ||
+          !window.SpeechSynthesisUtterance
+        ) {
+          console.error("Browser speech synthesis is not supported.");
+          resolve();
+          return;
+        }
 
-      if (!response.ok) {
-        throw new Error("Failed to generate AI voice");
-      }
+        if (requestId !== speechRequestRef.current) {
+          resolve();
+          return;
+        }
 
-      const audioBlob = await response.blob();
-      console.log(
-        `Aria TTS: audio download complete in ${((performance.now() - ttsStartedAt) / 1000).toFixed(2)}s`,
-        `Size: ${(audioBlob.size / 1024).toFixed(1)} KB`
-      );
+        window.speechSynthesis.cancel();
 
-      if (requestId !== speechRequestRef.current) return;
+        const utterance = new SpeechSynthesisUtterance(safeText);
+        utterance.lang = "en-IN";
+        const voices = window.speechSynthesis.getVoices();
+        const indianVoice =
+        voices.find((voice) => voice.name === "Microsoft Heera - English (India)") ||
+        voices.find((voice) => voice.name === "Microsoft Ravi - English (India)");
 
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-
-      audioRef.current = audio;
-      audioUrlRef.current = audioUrl;
-
-      await new Promise((resolve, reject) => {
+        if (indianVoice) {
+          utterance.voice = indianVoice;
+          utterance.lang = "en-IN";
+        }
+        utterance.rate = 1.5;
+        utterance.pitch = 1;
         let settled = false;
 
         const finish = () => {
@@ -421,32 +421,46 @@ export default function App() {
           resolve();
         };
 
-        speechResolveRef.current = finish;
-        audio.onended = finish;
-        audio.onpause = finish;
-        audio.onerror = () => {
-          if (requestId === speechRequestRef.current) {
-            reject(new Error("Audio playback failed"));
-          } else {
-            finish();
-          }
+        utterance.onend = () => {
+          console.log("Browser speech finished:", performance.now());
+          finish();
         };
 
-        audio.play().catch(reject);
+        utterance.onerror = (event) => {
+          console.error("Browser speech error:", event.error);
+          finish();
+        };
+
+        speechResolveRef.current = () => {
+          window.speechSynthesis.cancel();
+          finish();
+        };
+
+        console.log("Browser speech started:", performance.now());
+        window.speechSynthesis.speak(utterance);
       });
+
+
+    const ttsStartedAt = performance.now();
+
+    try {
+      if (requestId !== speechRequestRef.current) return;
+
+      console.log("Aria TTS: using browser speech");
+
+      await speakWithBrowser();
     } catch (error) {
-      if (requestId === speechRequestRef.current) {
-        console.error("Aura voice error:", error);
-      }
+      console.error("Aria browser speech error:", error);
     } finally {
-      // Only clean up this request's audio, never a newer request.
       if (requestId === speechRequestRef.current) {
+        speakingRef.current = false;
+        speechResolveRef.current = null;
+
         const audio = audioRef.current;
         const audioUrl = audioUrlRef.current;
 
         audioRef.current = null;
         audioUrlRef.current = null;
-        speakingRef.current = false;
 
         if (audio) {
           audio.onended = null;
@@ -458,7 +472,9 @@ export default function App() {
         if (audioUrl) URL.revokeObjectURL(audioUrl);
       }
     }
+
   }
+
 
 
 
